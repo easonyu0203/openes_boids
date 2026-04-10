@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 @dataclass
 class EnvConfig:
     # World
-    n_agents: int = 10
+    n_agents: int = 32
     box_size: float = 10.0          # Square box [0, box_size]^2
 
     # Agent physics
@@ -17,7 +17,7 @@ class EnvConfig:
     goal_speed: float = 1.5         # Speed of the goal random walk
 
     # Observation
-    n_obs_agents: int = 7           # K closest other agents to observe
+    n_obs_agents: int = 6           # K closest other agents to observe
 
     # Simulation
     fps: int = 30
@@ -40,7 +40,8 @@ class EnvConfig:
 
     @property
     def obs_shape(self) -> tuple[int, int]:
-        return (self.n_obs_agents + 1, self.feat_dim)
+        # tokens: 1 self + K neighbours + 1 goal = K+2
+        return (self.n_obs_agents + 2, self.feat_dim)
 
 
 @dataclass
@@ -54,10 +55,10 @@ class ModelConfig:
 @dataclass
 class ESConfig:
     pop_size: int = 256             # Must be even (antithetic pairs)
-    noise_std: float = 0.02
+    noise_std: float = 0.1
     lr: float = 0.01
     n_generations: int = 2000
-    noise_table_size: int = 250_000
+    noise_table_size: int = 25_000
 
     # Logging & checkpoints
     log_every: int = 10

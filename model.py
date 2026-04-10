@@ -75,12 +75,19 @@ class EfficientAttentionBlock(nnx.Module):
 
 
 class BoidPolicy(nnx.Module):
-    """Transformer boid policy: (K+1, feat_dim) obs → 3 action logits."""
+    """Transformer boid policy: (K+2, feat_dim) obs → 3 action logits.
+
+    Token layout  (must match env.get_obs):
+      index 0    – self          (gets ego_emb)
+      index 1..K – K neighbours  (no special embedding)
+      index K+1  – goal circle   (gets goal_emb)
+    """
 
     def __init__(self, env_cfg: EnvConfig, model_cfg: ModelConfig, rngs: nnx.Rngs):
         d = model_cfg.d_model
         self.input_proj  = nnx.Linear(env_cfg.feat_dim, d, rngs=rngs)
         self.ego_emb     = nnx.Param(jnp.zeros((d,)))
+        self.goal_emb    = nnx.Param(jnp.zeros((d,)))
         self.blocks      = nnx.List([
             EfficientAttentionBlock(d, model_cfg.n_heads, rngs=rngs)
             for _ in range(model_cfg.n_blocks)
@@ -90,19 +97,20 @@ class BoidPolicy(nnx.Module):
     def __call__(self, obs: jax.Array) -> jax.Array:
         """
         Args:
-            obs: (K+1, feat_dim) — index 0 is the self token.
+            obs: (K+2, feat_dim) — index 0 self, index K+1 goal.
         Returns:
             logits: (n_actions,)
         """
-        toks = self.input_proj(obs)                     # (K+1, d_model)
-        toks = toks.at[0].add(self.ego_emb.value)       # ego embedding
+        toks = self.input_proj(obs)                      # (K+2, d_model)
+        toks = toks.at[0].add(self.ego_emb.value)        # mark self token
+        toks = toks.at[-1].add(self.goal_emb.value)      # mark goal token
 
         self_tok = toks[0]    # (d_model,)
-        all_toks = toks       # (K+1, d_model), KV source
+        all_toks = toks       # (K+2, d_model), KV source
 
         for block in self.blocks:
             self_tok = block(self_tok, all_toks)
             # Propagate updated self into the KV context for the next block
             all_toks = all_toks.at[0].set(self_tok)
 
-        return self.action_head(self_tok)               # (n_actions,)
+        return self.action_head(self_tok)                # (n_actions,)

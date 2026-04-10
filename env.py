@@ -148,9 +148,10 @@ def step(
 
 def get_obs(state: EnvState, cfg: EnvConfig) -> jax.Array:
     """
-    Build observation tensor of shape (N, K+1, 11).
-    Token 0 is the self token; tokens 1..K are the K closest other agents.
-    If n_agents-1 < K the remaining slots are zero-padded.
+    Build observation tensor of shape (N, K+2, 11).
+    Token 0  : self
+    Tokens 1..K : K closest other agents (zero-padded if fewer exist)
+    Token K+1   : goal circle (gets a special goal_emb in the model)
     """
     N = cfg.n_agents
     K = cfg.n_obs_agents
@@ -219,8 +220,35 @@ def get_obs(state: EnvState, cfg: EnvConfig) -> jax.Array:
         axis=-1,
     )  # (N, 11)
 
-    # Stack: self first, then neighbours → (N, K+1, 11)
-    obs = jnp.concatenate([self_feats[:, None, :], other_feats], axis=1)
+    # --- Goal token ---
+    # Absolute features of the goal entity (same layout as agent abs_feats).
+    # dist_to_goal=0, angle_to_goal=0 because the goal IS the goal.
+    goal_abs = jnp.array([
+        state.goal_vel[0], state.goal_vel[1],   # vx, vy
+        0.0,                                     # omega (no rotation)
+        state.goal_pos[0],                       # d_left
+        cfg.box_size - state.goal_pos[0],        # d_right
+        state.goal_pos[1],                       # d_bottom
+        cfg.box_size - state.goal_pos[1],        # d_top
+        0.0, 0.0,                                # dist_to_goal, angle_to_goal
+    ])  # (9,)
+    # Relative features: distance and ego-centric angle from each agent to goal
+    ego_to_goal       = state.goal_pos[None, :] - state.pos          # (N, 2)
+    goal_dist_to_ego  = jnp.sqrt((ego_to_goal ** 2).sum(-1) + 1e-8)  # (N,)
+    goal_angle_to_ego = _wrap(
+        jnp.arctan2(ego_to_goal[:, 1], ego_to_goal[:, 0]) - state.heading
+    )  # (N,) ego-centric
+    goal_feats = jnp.concatenate([
+        jnp.tile(goal_abs[None, :], (N, 1)),    # (N, 9) — same for all egos
+        goal_dist_to_ego[:, None],               # (N, 1)
+        goal_angle_to_ego[:, None],              # (N, 1)
+    ], axis=-1)  # (N, 11)
+
+    # Stack: self | neighbours | goal → (N, K+2, 11)
+    obs = jnp.concatenate(
+        [self_feats[:, None, :], other_feats, goal_feats[:, None, :]],
+        axis=1,
+    )
     return obs
 
 
